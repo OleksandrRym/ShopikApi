@@ -1,4 +1,4 @@
-package com.orymar.shopik.repo.entity;
+package com.orymar.shopik.entity;
 
 import jakarta.persistence.*;
 import java.math.BigDecimal;
