@@ -4,7 +4,10 @@ spring:
     username: app_user
     password: app_pass
     driver-class-name: org.postgresql.Driver
-
+logging:
+  level:
+    org.hibernate.SQL: DEBUG
+    org.hibernate.orm.jdbc.bind: TRACE
   flyway:
     flyway:
       enabled: true
