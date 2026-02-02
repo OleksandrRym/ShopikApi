@@ -13,4 +13,5 @@ WORKDIR /app
 COPY --from=build /app/target/shopik-0.0.1-SNAPSHOT.jar app.jar
 
 EXPOSE 8080
-ENTRYPOINT ["java", "-jar", "app.jar"]
+ENV JAVA_OPTS="-server -Xms4g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+TieredCompilation"
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]

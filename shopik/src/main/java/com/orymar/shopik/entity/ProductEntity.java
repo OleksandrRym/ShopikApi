@@ -5,13 +5,17 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.UUID;
 
+import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
+import lombok.RequiredArgsConstructor;
 
 @Data
 @Entity
 @Builder
 @Table(name = "product")
+@AllArgsConstructor
+@RequiredArgsConstructor
 public class ProductEntity {
 
   @Id

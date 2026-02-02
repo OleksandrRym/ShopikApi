@@ -8,6 +8,7 @@ import com.orymar.shopik.service.ProductService;
 import java.util.UUID;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -36,6 +37,10 @@ public class ProductController {
   }
 
   @GetMapping("/{id}")
+  @Cacheable(
+          value = "product",
+          key = "#id"
+  )
   public ResponseEntity<ProductDto> get(@PathVariable UUID id) {
     var product = productService.getById(id);
     var dto = mapper.toDto(product);
