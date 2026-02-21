@@ -3,13 +3,10 @@ package org.orymar;
 import org.orymar.service.LLMService;
 
 public class Main {
-    public static void main(String[] args) {
-        try {
+    public static void main(String[] args) throws Exception {
             LLMService service = new LLMService();
-            String sss =  service.askLLM("шо скажеш про * (все що знаєш");
-            System.out.println(sss);
-        } catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+          var s =  service.ask("яка остання версія джави");
+        System.out.println(s);
+
     }
 }

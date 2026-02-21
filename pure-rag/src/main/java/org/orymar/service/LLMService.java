@@ -1,122 +1,114 @@
 package org.orymar.service;
 
-
 import org.orymar.repository.VectorRepository;
-import org.postgresql.util.PGobject;
+import org.orymar.utill.JSONUtills;
 
-import java.net.*;
-import java.io.*;
-import java.sql.*;
-import java.util.*;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.List;
 
 import static org.orymar.config.ApplicationProps.*;
-import static org.orymar.utill.JSONUtills.escapeJson;
+import static org.orymar.utill.JSONUtills.escape;
+import static org.orymar.utill.VectorUtills.parseEmbedding;
 
 public class LLMService {
 
+    private final VectorRepository vectorRepository = new VectorRepository();
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(10))
+            .build();
 
-    public String askLLM(String question) throws Exception {
-        float[] questionEmbedding = getEmbedding(question);
+    public String ask(String question) {
+        try {
+            float[] embedding = getEmbedding(question);
+            List<String> relevantDocs = vectorRepository.findRelevantDocuments(embedding);
 
-        List<String> relevantDocs = new ArrayList<>();
-        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USER, DB_PASSWORD)) {
-            String sql = "SELECT content FROM documents ORDER BY embedding <-> ?::vector LIMIT 5";
-            try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-                StringBuilder sb = new StringBuilder("[");
-                for (int i = 0; i < questionEmbedding.length; i++) {
-                    sb.append(questionEmbedding[i]);
-                    if (i < questionEmbedding.length - 1) sb.append(",");
-                }
-                sb.append("]");
+            String contextText = buildContext(relevantDocs);
+            String prompt = buildPrompt(contextText, question);
 
-                PGobject vectorObj = new PGobject();
-                vectorObj.setType("vector");
-                vectorObj.setValue(sb.toString());
+            String rawResponse = callLLM(prompt);
 
-                stmt.setObject(1, vectorObj);
+            return JSONUtills.extractResponse(rawResponse);
 
-                ResultSet rs = stmt.executeQuery();
-                while (rs.next()) {
-                    relevantDocs.add(rs.getString("content"));
-                }
-            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            return "no content";
         }
-
-        StringBuilder context = new StringBuilder();
-        for (String doc : relevantDocs) {
-            context.append(doc).append("\n---\n");
-        }
-
-        String combinedPrompt = "You are an assistant. Use the context below to answer the question.\n\nContext:\n"
-                + context.toString() + "\nQuestion:\n" + question;
-
-        String payload = "{\"model\":\"" + LLM_MODEL + "\",\"prompt\":\"" + escapeJson(combinedPrompt) + "\",\"stream\":false}";
-
-        HttpURLConnection conn = (HttpURLConnection) new URL(GENERATE_URL).openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Content-Type", "application/json");
-
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(payload.getBytes());
-        }
-
-        StringBuilder response = new StringBuilder();
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                response.append(line);
-            }
-        }
-
-        String resp = response.toString();
-        int idx = resp.indexOf("\"response\":\"");
-        if (idx < 0) return resp;
-
-        int start = idx + 12;
-        int end = resp.indexOf("\"", start);
-        return resp.substring(start, end);
     }
 
 
 
-    public static float[] getEmbedding(String text) throws Exception {
-        String payload = "{\"model\":\"" + EMBEDDING_MODEL + "\",\"prompt\":\"" + escapeJson(text) + "\"}";
-
-        HttpURLConnection conn = (HttpURLConnection) new URL(EMBEDDING_URL).openConnection();
-        conn.setRequestMethod("POST");
-        conn.setDoOutput(true);
-        conn.setRequestProperty("Content-Type", "application/json");
-
-        try (OutputStream os = conn.getOutputStream()) {
-            os.write(payload.getBytes());
-        }
-
-        StringBuilder response = new StringBuilder();
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                response.append(line);
-            }
-        }
-
-        String resp = response.toString();
-        int idx = resp.indexOf("\"embedding\":[");
-        if (idx < 0) throw new RuntimeException("Embedding not found");
-
-        int start = idx + 13;
-        int end = resp.indexOf("]", start);
-        String[] parts = resp.substring(start, end).split(",");
-        float[] embedding = new float[parts.length];
-        for (int i = 0; i < parts.length; i++) {
-            embedding[i] = Float.parseFloat(parts[i]);
-        }
-        return embedding;
-    }
-
-    public static void saveDocument(String content) throws Exception {
+    public void save(String content) throws Exception {
         float[] embedding = getEmbedding(content);
-        VectorRepository vectorRepository = new VectorRepository();
-        vectorRepository.saveDocument(embedding ,content);
+        vectorRepository.saveDocument(embedding, content);
     }
+
+    public float[] getEmbedding(String text) throws Exception {
+        String payload = """
+                {
+                  "model": "%s",
+                  "prompt": "%s"
+                }
+                """.formatted(EMBEDDING_MODEL, escape(text));
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(EMBEDDING_URL))
+                .timeout(Duration.ofSeconds(30))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("Embedding API error: " + response.body());
+        }
+
+        return parseEmbedding(response.body());
+    }
+
+    private String buildContext(List<String> docs) {
+        return String.join("\n---\n", docs);
+    }
+
+    private String buildPrompt(String context, String question) {
+        return """
+                You are an assistant. Use the context below to answer the question.
+
+                Context:
+                %s
+
+                Question:
+                %s
+                """.formatted(context, question);
+    }
+
+    private String callLLM(String prompt) throws Exception {
+        String payload = """
+                {
+                  "model": "%s",
+                  "prompt": "%s",
+                  "stream": false
+                }
+                """.formatted(LLM_MODEL, escape(prompt));
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(GENERATE_URL))
+                .timeout(Duration.ofSeconds(60))
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload, StandardCharsets.UTF_8))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("LLM API error: " + response.body());
+        }
+
+        return response.body();
+    }
+
+
 }
